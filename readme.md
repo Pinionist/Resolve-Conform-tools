@@ -1,5 +1,4 @@
-@ -0,0 +1,121 @@
-# DaVinci Resolve Lua Scripts
+# DaVinci Resolve Scripts
 
 These are some of the tools I use to speed up conforming & plate publishing in DaVinci Resolve.
 

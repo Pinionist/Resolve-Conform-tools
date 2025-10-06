@@ -119,3 +119,65 @@ Parses file paths for:
 These scripts modify project data. Test on non-critical projects first. No undo functionality beyond Resolve's native history.
 
 Version Control's plate/comp features assume specific folder structure (`/plate/` and `/comp/` directories). Modify `find_plate_sequence_path()` function if your structure differs.
+
+# Extract Reel/Clip Numbers - DaVinci Resolve Script
+
+## Purpose
+
+Strips clip names in DaVinci Resolve down to essential reel and clip identifiers. Removes camera metadata, timestamps, and other noise from filenames.
+
+## Supported Patterns
+
+### Pattern 1: Underscore-separated with middle content
+**Input:** `A001_10060927_C005.mov`  
+**Output:** `A001_C005`
+
+Pattern: `[ABCD]###_[anything]_C###`
+
+### Pattern 2: Four-digit reel with no separator before clip
+**Input:** `A_0001C006_250116_101243_p1DTJ.mov`  
+**Output:** `A001C006`
+
+Pattern: `[ABCD]_####C###`  
+Note: Takes last 3 digits of 4-digit reel number.
+
+### Pattern 3: Direct concatenation
+**Input:** `A001C003.mov`  
+**Output:** `A001C003`
+
+Pattern: `[ABCD]###C###`
+
+### Reel Letters
+Recognizes: A, B, C, D
+
+### Digit Requirements
+- Reel: 3 or 4 digits (4-digit gets truncated to last 3)
+- Clip: Exactly 3 digits
+
+## Usage
+
+1. Open DaVinci Resolve project
+2. Select target bin in Media Pool
+3. Run script via Console or Workspace → Scripts
+4. Script processes all clips in current bin only
+
+## Behavior
+
+- File extensions are stripped automatically
+- Original filename returned if no pattern matches
+- Clips already in correct format are skipped
+- Console output shows success/failure for each clip
+- Duplicate clips are processed once
+
+## Requirements
+
+- DaVinci Resolve (with Lua scripting enabled)
+- Active project with clips in Media Pool
+
+## Output
+
+Console prints:
+- Number of clips found
+- Each clip processed (before/after)
+- Total successful renames
+- Warnings for failed renames

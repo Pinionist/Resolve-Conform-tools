@@ -120,7 +120,7 @@ These scripts modify project data. Test on non-critical projects first. No undo 
 
 Version Control's plate/comp features assume specific folder structure (`/plate/` and `/comp/` directories). Modify `find_plate_sequence_path()` function if your structure differs.
 
-# ExtractReelName.lua
+## ExtractReelName.lua
 
 Strips camera metadata, timestamps, and noise from Media Pool clip names, leaving only reel and clip identifiers.
 

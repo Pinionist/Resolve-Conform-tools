@@ -114,12 +114,6 @@ Parses file paths for:
 **Known bugs:**
 -Currently there's a bug in Resolve when replacing clips (this script is using replace clip functionality) - when you have a clip imported from XML/AAF offline edit, Resolve thinks clips is much longer then it is, so when you're doing replace clips through this script (changing versions), then moves all the keyframes to the right of clip. Workaround - if possible, re-do your timewarps in compositing package of your choice and use non-timewarped versioned clip version in Resolve. 
 
-## Notes
-
-These scripts modify project data. Test on non-critical projects first. No undo functionality beyond Resolve's native history.
-
-Version Control's plate/comp features assume specific folder structure (`/plate/` and `/comp/` directories). Modify `find_plate_sequence_path()` function if your structure differs.
-
 ## ExtractReelName.lua
 
 Strips camera metadata, timestamps, and noise from Media Pool clip names, leaving only reel and clip identifiers.
@@ -144,3 +138,155 @@ Strips camera metadata, timestamps, and noise from Media Pool clip names, leavin
 - Skips clips already in correct format
 - Returns original name if no pattern matches
 - File extensions stripped automatically
+
+## CompDeploy.py
+
+Generates Fusion Studio `.comp` and Foundry Nuke `.nk` files from selected Media Pool clips with automatic version control and VFX notes integration.
+
+**Output Formats:**
+- Fusion Studio `.comp` files
+- Foundry Nuke `.nk` scripts with ACES 1.2 or custom OCIO support
+- Depth pass Fusion comps (separate versioning)
+- Motion mask (MMask) Fusion comps (separate versioning)
+
+**Features:**
+- Independent version tracking per format (Fusion, Nuke, Depth, MMask)
+- EXR export configuration (compression, bit depth, DWAA/DWAB quality)
+- VFX notes extraction from clip Comments and Description fields
+- Notes imported as StickyNote nodes in Fusion/Nuke
+- Multi-layer stack support (clips share shot name, layers numbered sequentially)
+- Primary layer auto-connected to Saver/Write nodes
+- Configurable OCIO color management for Nuke
+- Customizable output paths per format
+- Settings persistence across sessions
+- Atomic file writes (no partial/corrupted files)
+- Debug mode for clip property inspection
+
+**Workflow:**
+1. Select clips in Media Pool (stacked clips detected automatically)
+2. Configure EXR settings and output paths
+3. Enable desired formats (Fusion/Nuke/Depth/MMask)
+4. Generate - files created with auto-incremented versions
+
+**Version Control:**
+Each format maintains independent versioning. If `shot_010_comp_v003.comp` exists:
+- Next Fusion file: `shot_010_comp_v004.comp`
+- Next Nuke file: `shot_010_comp_v001.nk` (independent counter)
+- Next Depth file: `shot_010_depth_v001.comp`
+- Next MMask file: `shot_010_mmask_v001.comp`
+
+**VFX Notes:**
+Extracts notes from clip metadata fields:
+- **Comments** field: Full text extracted
+- **Description** field: Full text extracted
+- **Format**: StickyNote nodes positioned left of primary Loader node
+- Color-coded by source (Comments vs Description)
+
+**Layer Handling:**
+Stacked clips share base shot name with layer suffixes:
+- Single clip: `shot_010_comp_v001.comp`
+- Stack: `shot_010_L01_comp_v001.comp`, `shot_010_L02_comp_v001.comp`
+- Primary layer (lowest track) connects to output
+
+**Color Management:**
+Nuke scripts support:
+- ACES 1.2 (default): Input Device Transform (IDT) + RRT/ODT for sRGB
+- Custom OCIO: User-specified config file path
+- Default: Linear workflow without LUTs
+
+**Output Path Defaults:**
+- Fusion: `~/Desktop/fusion_comps/`
+- Nuke: `~/Desktop/nuke_comps/`
+- Depth: `~/Desktop/fusion_comps/depth/`
+- MMask: `~/Desktop/fusion_comps/mmask/`
+
+**Requirements:**
+- PySide6 or PySide2
+- DaVinci Resolve API access
+- Write permissions to output directories
+
+## PlateOrganizer.py
+
+Reorganizes flat directory structures into hierarchical scene/shot/asset folders based on naming patterns.
+
+**Pattern Recognition:**
+Parses folder names following: `<scene>_sh<shot>_L<layer>_<asset>_v<version>`
+
+**Examples:**
+- `bz_av_sh0030_L01_input_v000` → `bz_av/bz_av_sh0030/input/`
+- `sc01_sh0010_plate_v000` → `sc01/sc01_sh0010/plate/`
+- `seq01_sh0050_L02_comp_v003` → `seq01/seq01_sh0050/comp/`
+
+**Features:**
+- Scene name detection (captures everything before `_sh`)
+- Multi-layer sequence support (L01, L02, etc.)
+- Version preservation in folder structure
+- Dry run mode (preview changes without moving files)
+- Progress tracking with visual feedback
+- Settings persistence (remembers last source path)
+- Duplicate detection (warns if target exists)
+- Unmatched folder reporting
+
+**Workflow:**
+1. Select source directory containing flat folder structure
+2. Scan to analyze naming patterns
+3. Review detected scenes/shots/assets in table view
+4. Enable/disable dry run mode
+5. Organize - folders moved into hierarchy
+
+**Output Structure:**
+```
+source_directory/
+├── scene_name/
+│   ├── scene_name_sh0010/
+│   │   ├── asset_name/
+│   │   │   ├── scene_name_sh0010_L01_asset_name_v000/
+│   │   │   └── scene_name_sh0010_L02_asset_name_v001/
+│   │   └── another_asset/
+│   │       └── scene_name_sh0010_another_asset_v000/
+│   └── scene_name_sh0020/
+│       └── asset_name/
+│           └── scene_name_sh0020_asset_name_v000/
+```
+
+**Dry Run Mode:**
+Preview operations without modifying filesystem. Operations logged with visual indicators:
+- `📁 CREATE: path/` - Directory creation
+- `🚚 MOVE: source → destination` - File/folder move
+- `⚠️ SKIP: reason` - Skipped operation
+
+**Operation:**
+- Scans directories recursively
+- Matches folders against regex patterns
+- Groups by scene → shot → asset
+- Creates hierarchy if missing
+- Moves folders preserving contents
+- Reports unmatched folders (non-conforming names)
+
+**GUI Elements:**
+- Source path browser with settings persistence
+- Scene/Shot/Asset table summary
+- Progress bar for long operations
+- Detailed operation log
+- Statistics display (scene count, shot count, asset count)
+
+**Limitations:**
+- Requires consistent naming convention
+- Does not handle files outside folders
+- Scene name must precede `_sh` pattern
+- Cannot recover from interrupted operations
+
+**Requirements:**
+- PySide6 or PySide2
+- Write permissions to source directory
+- Sufficient disk space for reorganization
+
+## Notes
+
+These scripts modify project data. Test on non-critical projects first. No undo functionality beyond Resolve's native history.
+
+Version Control's plate/comp features assume specific folder structure (`/plate/` and `/comp/` directories). Modify `find_plate_sequence_path()` function if your structure differs.
+
+CompDeploy uses atomic file writes to prevent corruption. Temporary files (`.tmp` extension) indicate incomplete operations.
+
+PlateOrganizer dry run mode is enabled by default. Disable before executing actual file moves.

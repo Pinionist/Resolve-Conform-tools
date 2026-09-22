@@ -2,71 +2,91 @@ fusion = fusion or Fusion()
 local ui = fusion.UIManager
 local disp = bmd.UIDispatcher(ui)
 
-local width, height = 450, 550
+local width, height = 660, 400
 
 win = disp:AddWindow({
     ID = "RenameWin",
     WindowTitle = "Rename Timeline Clips",
     Geometry = { 100, 50, width, height },
     ui:VGroup {
+        -- Row 1: Scene + Shot Pattern
         ui:HGroup {
-            ui:Label { Text = "Scene:" },
-            ui:TextEdit { ID = "SceneText", Text = "sc01" }
-        },
-        ui:HGroup {
-            ui:Label { Text = "Shot Pattern:" },
+            ui:Label { Text = "Scene:", MinimumSize = { 110, 0 } },
+            ui:TextEdit { ID = "SceneText", Text = "sc01" },
+            ui:Label { Text = "Shot Pattern:", MinimumSize = { 110, 0 } },
             ui:TextEdit { ID = "PatternText", Text = "sh####" }
         },
+        -- Row 2: Start + Increment
         ui:HGroup {
-            ui:Label { Text = "Start by:" },
-            ui:TextEdit { ID = "StartNumber", Text = "10" }
-        },
-        ui:HGroup {
-            ui:Label { Text = "Increment:" },
+            ui:Label { Text = "Start by:", MinimumSize = { 110, 0 } },
+            ui:TextEdit { ID = "StartNumber", Text = "10" },
+            ui:Label { Text = "Increment by:", MinimumSize = { 110, 0 } },
             ui:TextEdit { ID = "Increment", Text = "10" }
         },
+        -- Row 3: Layer Suffix (left column only, right column empty to match grid)
         ui:HGroup {
-            ui:Label { Text = "Layer Suffix Pattern:" },
-            ui:TextEdit { ID = "StackedPattern", Text = "_L#" }
+            ui:Label { Text = "Layer Suffix:", MinimumSize = { 110, 0 } },
+            ui:TextEdit { ID = "StackedPattern", Text = "_L##" },
+            ui:Label { Text = "", MinimumSize = { 110, 0 } },
+            ui:HGap {}
         },
-        ui:VGroup {
-            ui:Label { Text = "Processing Mode:" },
-            ui:HGroup {
-                ui:CheckBox { ID = "FromTimelineStart", Text = "All Clips (Timeline Start)", Checked = true },
-                ui:CheckBox { ID = "FromPlayhead", Text = "Start from Playhead Position", Checked = false }
-            }
-        },
-        ui:VGroup {
-            ui:Label { Text = "Track Processing:" },
-            ui:HGroup {
+        -- Row 4: Three option groups side by side
+        ui:HGroup {
+            ui:VGroup {
+                ui:Label { Text = "Processing Mode:" },
+                ui:CheckBox { ID = "SelectedOnly", Text = "Selected Clips Only", Checked = true },
+                ui:CheckBox { ID = "FromTimelineStart", Text = "All Clips (Timeline Start)", Checked = false }
+            },
+            ui:VGroup {
+                ui:Label { Text = "Track Processing:" },
                 ui:CheckBox { ID = "ProcessVideoTracks", Text = "Video Tracks", Checked = true },
                 ui:CheckBox { ID = "ProcessAudioTracks", Text = "Audio Tracks", Checked = false }
+            },
+            ui:VGroup {
+                ui:Label { Text = "Rename Method:" },
+                ui:CheckBox { ID = "UseDirectNames", Text = "Direct Clip Name", Checked = true },
+                ui:CheckBox { ID = "UseVersionNames", Text = "Color Page Version Name", Checked = false }
             }
+        },
+        ui:Label {
+            ID = "MethodNote",
+            Text = "Direct: renames clip in timeline.  \nVersion: renames clip in timeline AND creates a matching Color page version (audio always uses Direct).",
+            WordWrap = true
         },
         ui:HGroup {
             ui:Button { ID = "PreviewButton", Text = "Preview" },
             ui:Button { ID = "RenameButton", Text = "Rename" },
-            ui:Button { ID = "CancelButton", Text = "Cancel" }
+            ui:Button { ID = "CancelButton", Text = "Close" }
         }
     }
 })
 
 local itm = win:GetItems()
 
+-- Mutex checkboxes: Processing Mode
 function win.On.FromTimelineStart.Clicked(ev)
     if itm.FromTimelineStart.Checked then
-        itm.FromPlayhead.Checked = false
-    else
-        itm.FromPlayhead.Checked = true
-    end
-end
-
-function win.On.FromPlayhead.Clicked(ev)
-    if itm.FromPlayhead.Checked then
-        itm.FromTimelineStart.Checked = false
+        itm.SelectedOnly.Checked = false
     else
         itm.FromTimelineStart.Checked = true
     end
+end
+
+function win.On.SelectedOnly.Clicked(ev)
+    if itm.SelectedOnly.Checked then
+        itm.FromTimelineStart.Checked = false
+    else
+        itm.SelectedOnly.Checked = true
+    end
+end
+
+-- Mutex checkboxes: Rename Method
+function win.On.UseVersionNames.Clicked(ev)
+    itm.UseDirectNames.Checked = not itm.UseVersionNames.Checked
+end
+
+function win.On.UseDirectNames.Clicked(ev)
+    itm.UseVersionNames.Checked = not itm.UseDirectNames.Checked
 end
 
 function win.On.RenameWin.Close(ev)
@@ -76,6 +96,8 @@ end
 function win.On.CancelButton.Clicked(ev)
     disp:ExitLoop()
 end
+
+-- ── Helpers ────────────────────────────────────────────────────────────────
 
 function FormatNumber(number, padding)
     return string.format("%0" .. padding .. "d", number)
@@ -87,229 +109,259 @@ function ApplySuffixPattern(pattern, number)
     return pattern:gsub("#+", formatted)
 end
 
-function TimecodeToFrame(timecode, frameRate)
-    local h, m, s, f = timecode:match("(%d+):(%d+):(%d+):(%d+)")
-    if not h then return 0 end
-    
-    local totalFrames = (tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(s)) * frameRate + tonumber(f)
-    return totalFrames
-end
-
 function ClipsOverlap(clip1, clip2)
-    local start1, end1 = clip1:GetStart(), clip1:GetEnd()
-    local start2, end2 = clip2:GetStart(), clip2:GetEnd()
-    return start1 < end2 and start2 < end1
+    return clip1:GetStart() < clip2:GetEnd() and clip2:GetStart() < clip1:GetEnd()
 end
 
-function ProcessVideoTracks(timeline, scene, prefix, padding, start_num, increment, stackedPattern, startIndex)
+-- Applies a name to a clip.
+-- Always sets the direct clip name via SetName, so the timeline label updates immediately
+-- regardless of mode.
+-- useVersions=true additionally creates a matching Color page version with the same name,
+-- so the artist does not need to invoke %{Version} manually afterward.
+-- Returns the SetName result (the direct rename is the operation being counted/logged).
+function RenameClip(clip, name, useVersions)
+    if useVersions then
+        clip:DeleteVersionByName()
+        clip:AddVersion(name, 0)
+    end
+    return clip:SetName(name)
+end
+
+-- Builds a lookup table of unique IDs for all currently selected timeline items.
+-- Returns nil if GetSelectedClips is unavailable (pre-21.0.4 Resolve build).
+function GetSelectedIdSet(timeline)
+    local ok, selected = pcall(function() return timeline:GetSelectedClips() end)
+    if not ok or not selected then
+        return nil
+    end
+    local idSet = {}
+    for _, clip in ipairs(selected) do
+        idSet[clip:GetUniqueId()] = true
+    end
+    return idSet
+end
+
+-- ── Core processing functions ───────────────────────────────────────────────
+
+function ProcessVideoTracks(timeline, scene, prefix, padding, start_num, increment, stackedPattern, startIndex, useVersions, dryRun, selectedIds)
     local videoTrackCount = timeline:GetTrackCount("video")
     local v1Clips = timeline:GetItemListInTrack('video', 1)
-    
-    if not v1Clips or #v1Clips == 0 then
-        return {}, 0
-    end
-    
+
+    if not v1Clips or #v1Clips == 0 then return {}, 0 end
+
     local clipCnt = start_num
     local renamedCount = 0
-    local previewNames = {}
-    
+    local log = {}
+
     for i = startIndex, #v1Clips do
         local v1Clip = v1Clips[i]
-        local props = v1Clip:GetProperty()
-        local is_enabled = props and props["Enabled"] ~= false
-        
-        if is_enabled then
+        local v1Selected = (not selectedIds) or selectedIds[v1Clip:GetUniqueId()]
+
+        if v1Clip:GetClipEnabled() and v1Selected then
+
             local shotName = prefix .. FormatNumber(clipCnt, padding)
             local baseName = scene ~= "" and (scene .. "_" .. shotName) or shotName
-            
+
+            -- Collect overlapping clips from V2+
             local stackedClips = {}
-            
             for trackNum = 2, videoTrackCount do
                 local trackClips = timeline:GetItemListInTrack('video', trackNum)
                 if trackClips then
-                    for _, trackClip in ipairs(trackClips) do
-                        local trackProps = trackClip:GetProperty()
-                        local trackEnabled = trackProps and trackProps["Enabled"] ~= false
-                        
-                        if trackEnabled and ClipsOverlap(v1Clip, trackClip) then
-                            table.insert(stackedClips, {
-                                clip = trackClip,
-                                trackNum = trackNum
-                            })
+                    for _, tClip in ipairs(trackClips) do
+                        local tSelected = (not selectedIds) or selectedIds[tClip:GetUniqueId()]
+                        if tClip:GetClipEnabled() and tSelected and ClipsOverlap(v1Clip, tClip) then
+                            table.insert(stackedClips, { clip = tClip, trackNum = trackNum })
                         end
                     end
                 end
             end
-            
-            table.sort(stackedClips, function(a, b)
-                return a.trackNum < b.trackNum
-            end)
-            
+            table.sort(stackedClips, function(a, b) return a.trackNum < b.trackNum end)
+
             local v1Name = #stackedClips > 0 and (baseName .. ApplySuffixPattern(stackedPattern, 1)) or baseName
-            local success = v1Clip:SetName(v1Name)
-            if success then
-                renamedCount = renamedCount + 1
-                table.insert(previewNames, v1Name .. " (video track 1)")
+
+            if dryRun then
+                table.insert(log, v1Name .. "  [V1]")
+            else
+                if RenameClip(v1Clip, v1Name, useVersions) then renamedCount = renamedCount + 1 end
+                table.insert(log, v1Name .. "  [V1]")
             end
-            
-            for j, stackedData in ipairs(stackedClips) do
+
+            for j, sd in ipairs(stackedClips) do
                 local layerName = baseName .. ApplySuffixPattern(stackedPattern, j + 1)
-                local stackSuccess = stackedData.clip:SetName(layerName)
-                if stackSuccess then
-                    renamedCount = renamedCount + 1
-                    table.insert(previewNames, layerName .. " (video track " .. stackedData.trackNum .. ")")
+                if dryRun then
+                    table.insert(log, layerName .. "  [V" .. sd.trackNum .. "]")
+                else
+                    if RenameClip(sd.clip, layerName, useVersions) then renamedCount = renamedCount + 1 end
+                    table.insert(log, layerName .. "  [V" .. sd.trackNum .. "]")
                 end
             end
-            
+
             clipCnt = clipCnt + increment
         end
     end
-    
-    return previewNames, renamedCount
+
+    return log, renamedCount
 end
 
-function ProcessAudioTracks(timeline, scene, prefix, padding, start_num, increment, stackedPattern, startIndex)
+-- Audio clips have no version system; always uses SetName regardless of useVersions flag.
+function ProcessAudioTracks(timeline, scene, prefix, padding, start_num, increment, stackedPattern, startIndex, dryRun, selectedIds)
     local audioTrackCount = timeline:GetTrackCount("audio")
     local v1Clips = timeline:GetItemListInTrack('video', 1)
-    
-    if not v1Clips or #v1Clips == 0 then
-        return {}, 0
-    end
-    
+
+    if not v1Clips or #v1Clips == 0 then return {}, 0 end
+
     local clipCnt = start_num
     local renamedCount = 0
-    local previewNames = {}
-    
+    local log = {}
+
     for i = startIndex, #v1Clips do
         local v1Clip = v1Clips[i]
-        local props = v1Clip:GetProperty()
-        local is_enabled = props and props["Enabled"] ~= false
-        
-        if is_enabled then
+        local v1Selected = (not selectedIds) or selectedIds[v1Clip:GetUniqueId()]
+
+        if v1Clip:GetClipEnabled() and v1Selected then
+
             local shotName = prefix .. FormatNumber(clipCnt, padding)
             local baseName = scene ~= "" and (scene .. "_" .. shotName) or shotName
-            
+
             local audioClips = {}
-            
             for trackNum = 1, audioTrackCount do
                 local trackClips = timeline:GetItemListInTrack('audio', trackNum)
                 if trackClips then
-                    for _, audioClip in ipairs(trackClips) do
-                        local audioProps = audioClip:GetProperty()
-                        local audioEnabled = audioProps and audioProps["Enabled"] ~= false
-                        
-                        if audioEnabled and ClipsOverlap(v1Clip, audioClip) then
-                            table.insert(audioClips, {
-                                clip = audioClip,
-                                trackNum = trackNum
-                            })
+                    for _, aClip in ipairs(trackClips) do
+                        local aSelected = (not selectedIds) or selectedIds[aClip:GetUniqueId()]
+                        if aClip:GetClipEnabled() and aSelected and ClipsOverlap(v1Clip, aClip) then
+                            table.insert(audioClips, { clip = aClip, trackNum = trackNum })
                         end
                     end
                 end
             end
-            
-            table.sort(audioClips, function(a, b)
-                return a.trackNum < b.trackNum
-            end)
-            
-            for j, audioData in ipairs(audioClips) do
-                local audioName
-                if #audioClips > 1 then
-                    audioName = baseName .. ApplySuffixPattern(stackedPattern, j)
+            table.sort(audioClips, function(a, b) return a.trackNum < b.trackNum end)
+
+            for j, ad in ipairs(audioClips) do
+                local audioName = #audioClips > 1 and (baseName .. ApplySuffixPattern(stackedPattern, j)) or baseName
+                if dryRun then
+                    table.insert(log, audioName .. "  [A" .. ad.trackNum .. "]")
                 else
-                    audioName = baseName
-                end
-                
-                local success = audioData.clip:SetName(audioName)
-                if success then
-                    renamedCount = renamedCount + 1
-                    table.insert(previewNames, audioName .. " (audio track " .. audioData.trackNum .. ")")
+                    if ad.clip:SetName(audioName) then renamedCount = renamedCount + 1 end
+                    table.insert(log, audioName .. "  [A" .. ad.trackNum .. "]")
                 end
             end
-            
+
             clipCnt = clipCnt + increment
         end
     end
-    
-    return previewNames, renamedCount
+
+    return log, renamedCount
 end
+
+-- ── Settings helper ─────────────────────────────────────────────────────────
 
 function GetUISettings()
     return {
-        scene = itm.SceneText.PlainText or "",
-        pattern = itm.PatternText.PlainText,
-        start_num = tonumber(itm.StartNumber.PlainText) or 1,
-        increment = tonumber(itm.Increment.PlainText) or 10,
-        stackedPattern = itm.StackedPattern.PlainText or "_L#",
-        fromPlayhead = itm.FromPlayhead.Checked,
-        processVideo = itm.ProcessVideoTracks.Checked,
-        processAudio = itm.ProcessAudioTracks.Checked
+        scene          = itm.SceneText.PlainText or "",
+        pattern        = itm.PatternText.PlainText,
+        start_num      = tonumber(itm.StartNumber.PlainText) or 1,
+        increment      = tonumber(itm.Increment.PlainText) or 10,
+        stackedPattern = itm.StackedPattern.PlainText or "_L##",
+        selectedOnly   = itm.SelectedOnly.Checked,
+        processVideo   = itm.ProcessVideoTracks.Checked,
+        processAudio   = itm.ProcessAudioTracks.Checked,
+        useVersions    = itm.UseVersionNames.Checked
     }
 end
 
-function win.On.PreviewButton.Clicked(ev)
-    local settings = GetUISettings()
-    
+function ValidateSettings(settings)
     if not settings.pattern or not string.find(settings.pattern, "#") then
-        ui:MessageBox("Pattern Error", "Pattern must include at least one '#' symbol to insert numbers.", { "OK" }, false)
-        return
+        ui:MessageBox("Pattern Error", "Pattern must include at least one '#' symbol.", { "OK" }, false)
+        return false
     end
-
     if not settings.processVideo and not settings.processAudio then
-        ui:MessageBox("Selection Error", "Please select at least one track type to process.", { "OK" }, false)
-        return
+        ui:MessageBox("Selection Error", "Select at least one track type to process.", { "OK" }, false)
+        return false
     end
+    return true
+end
 
-    local prefix = string.match(settings.pattern, "^(.-)#")
-    local padding = #string.match(settings.pattern, "#+")
+function GetPrefixAndPadding(pattern)
+    return string.match(pattern, "^(.-)#"), #string.match(pattern, "#+")
+end
+
+-- ── Run shared logic ─────────────────────────────────────────────────────────
+
+function RunProcessing(dryRun)
+    local settings = GetUISettings()
+    if not ValidateSettings(settings) then return end
+
+    local prefix, padding = GetPrefixAndPadding(settings.pattern)
 
     local resolve = Resolve()
-    local project = resolve:GetProjectManager():GetCurrentProject()
-    local timeline = project:GetCurrentTimeline()
-    
-    local startIndex = 1
-    local previewNames = {}
+    local timeline = resolve:GetProjectManager():GetCurrentProject():GetCurrentTimeline()
+    local v1Clips = timeline:GetItemListInTrack('video', 1)
 
-    if settings.fromPlayhead then
-        local currentTimecode = timeline:GetCurrentTimecode()
-        local frameRate = timeline:GetSetting("timelineFrameRate") or 25
-        local currentFrame = TimecodeToFrame(currentTimecode, frameRate)
-        
-        if settings.processVideo then
-            local v1Clips = timeline:GetItemListInTrack('video', 1)
-            if v1Clips then
-                for i, clip in ipairs(v1Clips) do
-                    local start = clip:GetStart()
-                    local duration = clip:GetDuration()
-                    local endFrame = start + duration - 1
-                    
-                    if currentFrame >= start and currentFrame <= endFrame then
-                        startIndex = i
-                        break
-                    end
-                end
-            end
-        end
-        
-        table.insert(previewNames, "Starting from playhead at " .. currentTimecode .. " (clip " .. startIndex .. ")")
-        table.insert(previewNames, "")
+    if not v1Clips or #v1Clips == 0 then
+        ui:MessageBox("Error", "No clips on video track 1.", { "OK" }, false)
+        return
     end
+
+    local selectedIds = nil
+    if settings.selectedOnly then
+        selectedIds = GetSelectedIdSet(timeline)
+        if selectedIds == nil then
+            ui:MessageBox("API Error", "This Resolve build has no Timeline:GetSelectedClips(). Requires Resolve Studio 21.0.4 or later.", { "OK" }, false)
+            return
+        end
+        if next(selectedIds) == nil then
+            ui:MessageBox("Selection Error", "No clips selected on the timeline.", { "OK" }, false)
+            return
+        end
+    end
+
+    local startIndex = 1
+    local allLog = {}
+    local totalRenamed = 0
+
+    if settings.selectedOnly then
+        table.insert(allLog, "Mode: Selected Clips Only")
+        table.insert(allLog, "")
+    end
+
+    local methodLabel = settings.useVersions and "Version Names (Color Page)" or "Direct Clip Names"
+    table.insert(allLog, "Method: " .. methodLabel)
+    table.insert(allLog, "")
 
     if settings.processVideo then
-        local videoPreview, _ = ProcessVideoTracks(timeline, settings.scene, prefix, padding, settings.start_num, settings.increment, settings.stackedPattern, startIndex)
-        for _, name in ipairs(videoPreview) do
-            table.insert(previewNames, name)
-        end
-    end
-    
-    if settings.processAudio then
-        local audioPreview, _ = ProcessAudioTracks(timeline, settings.scene, prefix, padding, settings.start_num, settings.increment, settings.stackedPattern, startIndex)
-        for _, name in ipairs(audioPreview) do
-            table.insert(previewNames, name)
-        end
+        local log, count = ProcessVideoTracks(
+            timeline, settings.scene, prefix, padding,
+            settings.start_num, settings.increment,
+            settings.stackedPattern, startIndex,
+            settings.useVersions, dryRun, selectedIds
+        )
+        for _, l in ipairs(log) do table.insert(allLog, l) end
+        totalRenamed = totalRenamed + count
     end
 
-    local previewText = table.concat(previewNames, "\n")
+    if settings.processAudio then
+        if settings.processVideo and #allLog > 0 then
+            table.insert(allLog, "")
+        end
+        local log, count = ProcessAudioTracks(
+            timeline, settings.scene, prefix, padding,
+            settings.start_num, settings.increment,
+            settings.stackedPattern, startIndex,
+            dryRun, selectedIds
+        )
+        for _, l in ipairs(log) do table.insert(allLog, l) end
+        totalRenamed = totalRenamed + count
+    end
+
+    return allLog, totalRenamed
+end
+
+-- ── Button handlers ──────────────────────────────────────────────────────────
+
+function win.On.PreviewButton.Clicked(ev)
+    local log, _ = RunProcessing(true)
+    if not log then return end
 
     local previewWin = disp:AddWindow({
         ID = "PreviewWin",
@@ -319,7 +371,7 @@ function win.On.PreviewButton.Clicked(ev)
             ui:TextEdit {
                 ID = "PreviewText",
                 ReadOnly = true,
-                Text = previewText
+                Text = table.concat(log, "\n")
             },
             ui:Button { ID = "ClosePreview", Text = "Close" }
         }
@@ -333,68 +385,36 @@ function win.On.PreviewButton.Clicked(ev)
 end
 
 function win.On.RenameButton.Clicked(ev)
-    local settings = GetUISettings()
+    local log, totalRenamed = RunProcessing(false)
+    if not log then return end
 
-    if not settings.pattern or not string.find(settings.pattern, "#") then
-        ui:MessageBox("Pattern Error", "Pattern must include at least one '#' symbol to insert numbers.", { "OK" }, false)
-        return
-    end
+    for _, l in ipairs(log) do print(l) end
+    print("Renaming complete. " .. totalRenamed .. " clips renamed.")
 
-    if not settings.processVideo and not settings.processAudio then
-        ui:MessageBox("Selection Error", "Please select at least one track type to process.", { "OK" }, false)
-        return
-    end
+    local confirmMsg = totalRenamed .. " clips renamed."
 
-    local prefix = string.match(settings.pattern, "^(.-)#")
-    local padding = #string.match(settings.pattern, "#+")
-
-    local resolve = Resolve()
-    local project = resolve:GetProjectManager():GetCurrentProject()
-    local timeline = project:GetCurrentTimeline()
-
-    local startIndex = 1
-    local totalRenamed = 0
-
-    if settings.fromPlayhead then
-        local currentTimecode = timeline:GetCurrentTimecode()
-        local frameRate = timeline:GetSetting("timelineFrameRate") or 25
-        local currentFrame = TimecodeToFrame(currentTimecode, frameRate)
-        
-        if settings.processVideo then
-            local v1Clips = timeline:GetItemListInTrack('video', 1)
-            if v1Clips then
-                for i, clip in ipairs(v1Clips) do
-                    local start = clip:GetStart()
-                    local duration = clip:GetDuration()
-                    local endFrame = start + duration - 1
-                    
-                    if currentFrame >= start and currentFrame <= endFrame then
-                        startIndex = i
-                        break
-                    end
-                end
-            end
-        end
-        
-        print("Starting from playhead at " .. currentTimecode .. " (clip " .. startIndex .. ")")
-    end
-
-    if settings.processVideo then
-        local _, videoRenamed = ProcessVideoTracks(timeline, settings.scene, prefix, padding, settings.start_num, settings.increment, settings.stackedPattern, startIndex)
-        totalRenamed = totalRenamed + videoRenamed
-        print("Video tracks processed: " .. videoRenamed .. " clips renamed")
-    end
-    
-    if settings.processAudio then
-        local _, audioRenamed = ProcessAudioTracks(timeline, settings.scene, prefix, padding, settings.start_num, settings.increment, settings.stackedPattern, startIndex)
-        totalRenamed = totalRenamed + audioRenamed
-        print("Audio tracks processed: " .. audioRenamed .. " clips renamed")
-    end
-
-    print("Renaming complete. " .. totalRenamed .. " clips renamed total.")
-    
     disp:ExitLoop()
+
+    local confirmWin = disp:AddWindow({
+        ID = "ConfirmWin",
+        WindowTitle = "Done",
+        Geometry = { 200, 200, 500, 150 },
+        ui:VGroup {
+            ui:Label { ID = "ConfirmLabel", Text = confirmMsg, WordWrap = true },
+            ui:Button { ID = "CloseConfirm", Text = "OK" }
+        }
+    })
+
+    function confirmWin.On.CloseConfirm.Clicked(ev)
+        confirmWin:Hide()
+        disp:ExitLoop()
+    end
+
+    confirmWin:Show()
+    disp:RunLoop()
 end
+
+-- ── Run ───────────────────────────────────────────────────────────────────────
 
 win:Show()
 disp:RunLoop()

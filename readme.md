@@ -9,25 +9,51 @@ Place `.lua` files in:
 - **macOS**: `~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Edit/`
 - **Linux**: `~/.local/share/DaVinciResolve/Fusion/Scripts/Edit/`
 
+The same folder also accepts `.py` scripts (see `Grid_Timeline_Builder.py` below) - Resolve runs either from the same menu.
+
 Access via Workspace > Scripts > Edit
 
 ## ExportTimelineGenerator.lua
 
-Duplicates timelines and groups clips by resolution. Each output timeline contains only clips matching its resolution and is configured to that resolution.
+Duplicates one or more base timelines (via a DRT/AAF export-import round trip) and splits each into per-resolution copies. Each output timeline contains only the clips matching its resolution and is configured to that resolution.
 Some of the script logic based on Thatcher Freeman's "Generate All Clips Timeline" lua script. 
 
+**Base timeline selection:** timelines selected in the Media Pool, or every timeline in the current bin. Each selected base timeline is processed independently and gets its own set of output timelines.
+
 **Features:**
-- Groups clips by native resolution
+- Groups clips by native resolution, one output timeline per source-timeline/resolution pair
 - Optional PAR (Pixel Aspect Ratio) correction for non-square pixels
-- Optional half-resolution output (50%) with configurable minimum threshold
+- Resolution scaling: No Scaling, Scale by Height, or Scale by Width to an arbitrary target size in px (not a fixed half-resolution step). Options to snap results to even pixel dimensions and to never upscale a clip smaller than the target
 - Video-only mode (strips audio tracks)
-- Multiple sorting methods (source name, inpoint, reel name, timeline position)
-- Preserves Color page version names from source timeline
-- Handles disabled clips
+- Include/exclude disabled clips
+- Multiple sorting methods (source name, source inpoint, inpoint on timeline, reel name, or unsorted)
+- Preserves Color page version names and custom clip names from the source timeline as version names on the output
+- Optional: set clip display names directly to those shot names (no manual `%{Version}` step in the Inspector)
+- Clips are colored per source timeline (cycled from Resolve's standard clip-color palette), so multi-timeline output stays visually traceable to its source
+- Post-build verification per timeline (checks the applied resolution and warns if "Use Project Settings" is still enabled and overriding it)
 
 **Output:**
-- Timeline name format: `EXPORT_<resolution>` (e.g., `EXPORT_1920x1080`)
-- Suffixes added: `_PAR` for PAR-corrected, `_HALF` for half resolution
+- Timeline name format: `<source_timeline>_EXPORT_<source_resolution>[_PAR][_<final_w>x<final_h>]`
+- `_PAR` appended when PAR-corrected; `_<width>x<height>` appended when scaling was applied (e.g. `EditTimeline_EXPORT_4096x2304_PAR_1920x1080`)
+
+**Requirement:** base timelines must have "Use Project Settings" disabled, or the custom resolution is silently ignored (the script warns about this in the console, but won't fix it for you).
+
+## TimelinePerFile.lua
+
+Creates one timeline per clip from the current Media Pool bin (or just the current selection) - useful for turning a bin of individual plates/files into per-shot timelines in one pass, rather than one at a time.
+
+**Scans for:** `.mp4`, `.mov`, `.mxf`, `.exr` (image sequences and video files); anything else in the bin is skipped and logged to the console with its path, extension, type, and format.
+
+**Per-clip options:**
+- Process selected clips only, or the whole current bin
+- Preserve source FPS (skips a clip if FPS metadata is missing)
+- Preserve source resolution (skips a clip if resolution metadata is missing)
+- Preserve source start timecode, including drop-frame detection (skips a clip if the start TC is missing or malformed)
+- Strip the file extension from the resulting timeline name
+
+**Output:** one new timeline per clip, named after the source clip (minus extension, if that option is on). Skipped/ignored clips don't block the rest of the batch - the run finishes and reports created/skipped/ignored/timecode-warning counts.
+
+**Requirement:** "Process selected clips only" needs `MediaPool:GetSelectedClips()`, added in Resolve 18.5+.
 
 
 ## RemoveSequencePadding.lua
@@ -47,23 +73,26 @@ Strips frame range indicators and file extensions from Media Pool clip names.
 
 ## TimelineClipsRenamer.lua
 
-Batch renames timeline clips using customizable naming patterns. Handles multi-layer stacks and audio tracks. This version requires Resolve 20.2. 
+Batch renames timeline clips using customizable naming patterns. Handles multi-layer stacks and audio tracks.
 
 **Pattern Syntax:**
 - `#` = Number placeholder (padding determined by count: `##` = 2 digits, `####` = 4 digits)
 - Scene + Shot pattern: `sc01` + `sh####` → `sc01_sh0010`, `sc01_sh0020`
-- Layer suffix: `_L#` appended to stacked clips → `sc01_sh0010_L1`, `sc01_sh0010_L2`
+- Layer suffix: `_L##` appended to stacked clips → `sc01_sh0010_L01`, `sc01_sh0010_L02`
 
 **Features:**
 - Preview before execution
 - Start/increment values for numbering
-- Process from timeline start or playhead position
+- Process either the current timeline selection, or all clips from timeline start (no longer supports starting from the playhead position)
+- Rename method: direct clip name, or a matching Color page version (audio clips always use the direct name - there's no Color page version system for audio)
 - Separate processing for video/audio tracks
 - Automatic detection of vertically stacked clips (shares naming across layers)
 - Skips disabled clips
 
 **Use Case:**
 Standardize shot naming for editorial handoff or VFX plate organization.
+
+**Requirement:** "Process selected clips only" mode requires `Timeline:GetSelectedClips()`, added in Resolve Studio 21.0.4 - older builds can still use the "all clips from timeline start" mode.
 
 ## VersionControl.lua
 
@@ -138,6 +167,39 @@ Strips camera metadata, timestamps, and noise from Media Pool clip names, leavin
 - Skips clips already in correct format
 - Returns original name if no pattern matches
 - File extensions stripped automatically
+
+## Grid_Timeline_Builder.py
+
+Builds a mosaic/contact-sheet timeline from a Media Pool bin: every clip scaled into its own cell in an auto-solved grid, all clips starting at timeline start. Runs from Workspace > Scripts > Edit like the `.lua` tools above, despite being Python (see Installation note above).
+
+**Grid layout:**
+- Auto-solves column/row count for the clip count and canvas resolution, or fixed column count
+- Configurable gap (px, or % of timeline width/height), outer margin (half gap / full gap / none), minimum grid size (NxN), vertical anchor (top/center)
+- "Fill empty space with random shots" pads incomplete rows and trailing space by repeating random bin shots (forces top anchor)
+
+**Ordering:** by clip name, random, or by source (embedded) timecode.
+
+**Aspect handling:**
+- **Letterbox (fit)**: preserves each clip's own aspect inside its cell; mixed-aspect bins show pillarbox/letterbox bars
+- **Crop to fill**: uses Resolve's native `Scaling = Fill` so mixed-resolution/aspect clips fill their cell edge-to-edge, no manual crop math. Crop basis: dominant source aspect, timeline resolution, or custom W:H. Guaranteed clean and undistorted only when the chosen basis matches the canvas's own aspect ratio; a mismatched basis fills with a slight non-uniform stretch instead of a gap (logged as a warning, not silent)
+
+**Per-track color:** none, cycle through Resolve's standard clip-color palette, or random.
+
+**Timing:** loop, bounce (ping-pong), or native length for clips shorter than the target; target length in frames (0 = length of the longest clip).
+
+**Timeline:** configurable resolution (presets or custom W/H), optional frame-rate override, auto-generated name (`<bin>_grid_<W>x<H>`, editable), replace-existing or auto-version with a `_v001`, `_v002`, ... suffix.
+
+**Persistence:** remembers last-used settings (grid, timing, aspect, color, resolution, bin, timeline name) between sessions in `~/.grid_timeline_builder_state.json`. Restoring the timeline name bypasses the auto-name logic, so reopening the GUI and rebuilding with different settings targets the same timeline unless you type a new name.
+
+**Resolution filter:** restrict to bin clips matching one native resolution; warns when the bin has mixed resolutions.
+
+**Requirements:**
+- DaVinci Resolve Studio (uses TimelineItem Scaling/Zoom/Pan properties not exposed the same way in the Free edition)
+- No external Python packages - built on Resolve's Fusion UI toolkit and the standard library only
+
+**Known limitations:**
+- Crop-to-fill is only guaranteed distortion-free when the crop basis equals the canvas aspect ratio; a true distortion-free arbitrary-aspect crop would need a compound clip per source clip - not implemented
+- The `timelineFrameRate` setting key used for the frame-rate override is unverified against the scripting API beyond this build
 
 ## CompDeploy.py
 

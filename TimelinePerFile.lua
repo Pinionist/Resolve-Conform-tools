@@ -1,4 +1,3 @@
--- CreateTimelinesFromBinMedia.lua
 -- GUI tool. Scans the current Media Pool bin (or only the selected clips)
 -- for video files and image sequences (mp4, mov, mxf, exr).
 -- Creates one timeline per clip. User selects: selected clips only, keep

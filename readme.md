@@ -9,7 +9,7 @@ Place `.lua` files in:
 - **macOS**: `~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Edit/`
 - **Linux**: `~/.local/share/DaVinciResolve/Fusion/Scripts/Edit/`
 
-The same folder also accepts `.py` scripts (see `Grid_Timeline_Builder.py` below) - Resolve runs either from the same menu.
+The same folder also accepts `.py` scripts (see `Grid_Timeline_Builder.py` and `ConnectedClips.py` below) - Resolve runs either from the same menu.
 
 Access via Workspace > Scripts > Edit
 
@@ -200,6 +200,46 @@ Builds a mosaic/contact-sheet timeline from a Media Pool bin: every clip scaled 
 **Known limitations:**
 - Crop-to-fill is only guaranteed distortion-free when the crop basis equals the canvas aspect ratio; a true distortion-free arbitrary-aspect crop would need a compound clip per source clip - not implemented
 - The `timelineFrameRate` setting key used for the frame-rate override is unverified against the scripting API beyond this build
+
+## ConnectedClips.py
+
+Finds every direct use of the Media Pool clips you have selected across all timelines in the current project, and jumps to any use with a double-click. Runs from Workspace > Scripts > Edit like the `.lua` tools above, despite being Python (see Installation note above).
+
+**Workflow:**
+1. Select one or more clips in the Media Pool
+2. Run the script (it scans automatically on open) or press "Find uses of Media Pool selection"
+3. Review the results table; double-click a row (or press "Go to selected use") to open that timeline on the Edit page with the playhead on the clip's first frame
+
+**Results table columns:** #, Source clip, Timeline, Track (V1, A2, ...), IN, OUT, Frames, Enabled, Timeline clip. Columns are sortable.
+
+**Matching:**
+- Identity is the Media Pool item's unique ID, never clip name or file path - renamed clips and same-named different clips are handled correctly
+- Scans every video and audio track of every timeline; audio and video uses are separate rows
+- Disabled clips are included (shown in the Enabled column)
+- Selecting multiple Media Pool clips scans for all of them in one pass
+
+**Timecode:**
+- IN/OUT are shown as timeline timecode, derived from the timeline start timecode and frame rate
+- Drop-frame supported for 29.97, 59.94, and 119.88 fps; other drop-frame rates raise an error
+- OUT is exclusive (the first frame after the clip)
+- If timecode cannot be computed for a timeline, the row falls back to raw frame numbers and a warning is logged
+
+**Navigation safety:**
+- Before jumping, the script re-reads the clip from the timeline, so moved or trimmed clips land on their current position
+- Aborts with a "run Find again" message if the project changed, the timeline or clip was removed, or the clip's source was swapped since the scan
+- Confirms the actual playhead timecode after the jump (retries up to 10 times) instead of trusting the API return value
+
+**Status line:** reports the use count, number of timelines containing uses, and number of project timelines scanned. If any timeline or track could not be read, the line is prefixed with `PARTIAL RESULTS / LIMITATIONS` and the full warning list is printed to the console.
+
+**Requirements:**
+- DaVinci Resolve Studio (needs the Fusion UI Manager)
+- No external Python packages - standard library only
+
+**Known limitations:**
+- Direct uses only: contents of compound clips and multicam clips, and Media Pool items referenced inside Fusion nodes, are not expanded
+- Interlaced timelines are not supported for navigation (raises an error)
+- Read-only scan, but navigation changes the current timeline and playhead position
+- Results are a snapshot - scan again after editing
 
 ## CompDeploy.py
 

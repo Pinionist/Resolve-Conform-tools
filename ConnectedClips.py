@@ -1,6 +1,6 @@
 """Find direct Media Pool clip uses in the current Resolve project.
 
-Run from Workspace > Scripts > Utility. No third-party Python packages.
+Run from Workspace > Scripts > Edit. No third-party Python packages.
 The scan only reads the project; navigation changes timeline and playhead.
 """
 

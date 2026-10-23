@@ -9,7 +9,7 @@ Place `.lua` files in:
 - **macOS**: `~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Edit/`
 - **Linux**: `~/.local/share/DaVinciResolve/Fusion/Scripts/Edit/`
 
-The same folder also accepts `.py` scripts (see `Grid_Timeline_Builder.py` and `ConnectedClips.py` below) - Resolve runs either from the same menu.
+The same folder also accepts `.py` scripts (see `Grid_Timeline_Builder.py`, `ConnectedClips.py`, `XmlScaleConverter_Resolve.py` and `SequenceImporter_Resolve.py` below) - Resolve runs either from the same menu.
 
 Access via Workspace > Scripts > Edit
 
@@ -240,6 +240,106 @@ Finds every direct use of the Media Pool clips you have selected across all time
 - Interlaced timelines are not supported for navigation (raises an error)
 - Read-only scan, but navigation changes the current timeline and playhead position
 - Results are a snapshot - scan again after editing
+
+## XmlScaleConverter_Resolve.py
+
+Rewrites the Basic Motion **Scale** (including keyframes) and **Center** (position) of video clips in a Premiere / FCP7 XML so that a conform done in Resolve with a given **Input Scaling** mode matches the offline edit. Runs from Workspace > Scripts > Edit like the `.lua` tools above, despite being Python (see Installation note above). Built on Resolve's Fusion UI toolkit, so no PySide is needed.
+
+**Workflow:**
+1. Add one or more XML files (Add picks one file per dialog; repeat for more)
+2. Pick the Resolve Input Scaling mode you will conform with
+3. Check the preview table (old vs. new scale and position per clip)
+4. Process - converted XMLs are written next to the source (see Output)
+
+**Input Scaling modes:** Scale full frame with crop (Fill), Scale entire image to fit (Fit), Center crop with no resizing (None).
+
+**Math (per clip, source W x H, timeline TW x TH):**
+- `fill_factor = max(TW/W, TH/H)`
+- `mode_fit` = Fill: `max(TW/W, TH/H)` | Fit: `min(TW/W, TH/H)` | None: `1.0`
+- Clips whose source matches the reference source: `scale_new = scale_old * target_base / original_base` (target auto = `fill_factor / mode_fit * 100`)
+- Clips with any other source (stills, proxies, ...): `scale_new = scale_old / (fill_factor * 100) * (fill_factor / mode_fit * 100)`
+- Position (Resolve px, `X = horiz*TW`, `Y = -vert*TH`): `position_new = position_old * position_factor` (auto = `1 / mode_fit`)
+- Fill mode, 4608x3164 into 1920x1080: position factor 2.4 (verified against an offline)
+- Fit and None factors are extrapolated from the same rule - verify on a clip before trusting them
+
+**Settings:**
+- Timeline resolution: auto from the XML, or manual
+- Source resolution (the clips the base scale applies to): auto (most common in the XML), or manual
+- Original scale in XML (%): the scale that means "fills the frame" in the offline (default 42)
+- Target scale (%): auto from mode, or manual
+- Position: convert on/off, auto factor, or manual factor
+
+**Preview table:** clip number, video track, clip ID, name, source resolution, scale old/new, position X/Y old/new. Converted values are highlighted.
+
+**Manual positions:** select a clip row, enter X / Y (Resolve px, Y up) and press Set to override the calculated position for that clip. Clear clip / Clear all (selected file) revert the overrides. Overridden values show in orange.
+
+**Output:**
+- Default: a `fixed` folder next to each source XML, or a custom output folder
+- File name: source name + suffix (default `_fixed`); an empty suffix with the same folder is refused so the source is never overwritten
+- Log lists every written file with clip and manual-position counts
+
+**Persistence:** settings are remembered in `~/Documents/XMLScaleConverter/settings.json`.
+
+**Requirements:**
+- Premiere / FCP7-style XML with `Basic Motion` filters
+- No external Python packages
+
+**Known limitations:**
+- Clips without a `Basic Motion` filter are left untouched and are not listed
+- A non-zero anchor point is not converted - the clip is flagged with a warning in the status bar and log
+- Manual position overrides are not available for clips with position keyframes (keyframes are still scaled with the automatic factor)
+- Manual positions are set with the X / Y fields under the table (UIManager trees have no in-cell editing), and drag-and-drop of XML files is not supported
+- Fit and None modes are not verified against an offline
+
+## SequenceImporter_Resolve.py
+
+Scans a directory for image sequences or movie files and imports them into the Media Pool, with presets, optional sub-bins, post-import renaming and clip coloring. Runs from Workspace > Scripts > Edit like the `.lua` tools above, despite being Python (see Installation note above). Built on Resolve's Fusion UI toolkit, so no PySide is needed.
+
+**Workflow:**
+1. Pick the source directory
+2. Pick a preset (or type your own name filter) and the file format
+3. Scan - results are listed as NEW or ALREADY IMPORTED
+4. Import new sequences only, or import all of them
+
+**Formats:** EXR (default), DPX, TIFF (`.tif`, `.tiff`), PNG, JPEG (`.jpg`, `.jpeg`), MOV, MP4, MXF.
+- Image formats are grouped into numbered sequences (`name_1001.ext` or `name.1001.ext`, 3+ digits); a single frame is not treated as a sequence
+- MOV / MP4 / MXF show up as one entry per file
+- Extension matching is case-insensitive; hidden files and macOS `._` resource forks are skipped
+- EXR compression (ZIP, DWAA, DWAB, PIZ, ...) is read from the file header and shown in the results
+
+**Name filter:** a case-insensitive substring match against either the sequence name **or any folder name** between the scan root and the sequence. With the filter `COMP_IN`, everything under a `.../COMP_IN/...` folder is picked up, even if the sequence name does not contain `COMP_IN`.
+
+**Presets:** Plate v000, COMP_IN, COMP_OUT, Comp v999, Depth v000 and Custom. Each preset stores a name filter, a clip color and the "remove padding" option; edits are saved to the preset that is active when you import, browse or close the window. New defaults added in the script are merged into your saved settings, and saved presets that are not in the defaults are kept.
+
+**Sub-bins:** with "Create sub-bins from folder after filter match" (on by default), the folder directly below the first folder that matches the filter becomes a sub-bin of the current Media Pool bin:
+- `SHOTS/COMP_IN/TMOBILE30s/sh0010/plate/...` with the filter `COMP_IN` -> sub-bin `TMOBILE30s`
+- Existing sub-bins with the same name are reused
+- Sequences without a folder below the match, or with an empty filter, import into the current bin
+- The scan results are grouped the same way (`TMOBILE30s` under NEW / ALREADY IMPORTED) and have a Bin column
+
+**NEW vs. ALREADY IMPORTED:** a sequence counts as already imported only if a clip with the same name has been imported **from the same folder**, based on each clip's file path. The same shot name in `COMP_IN` and `COMP_OUT` is therefore treated as two different sequences.
+
+**Post-import actions:**
+- Remove sequence padding: strips `[1001-1130]` style frame ranges and the extension from clip names (same logic as `RemoveSequencePadding.lua`)
+- Clip color: any of Resolve's standard clip colors, or None
+
+**Import behavior:**
+- Imports exactly the scanned items, not whole folders: image sequences are imported as a frame range (e.g. `name.%04d.exr`, first to last frame), movies as a single file
+- If the frame-range import returns nothing, the script retries with the first-frame path and logs it
+- Importing an already imported sequence again does not create a duplicate clip (Resolve reuses the existing one); rename and color are re-applied
+- The Media Pool bin that was selected before the import is restored afterwards
+
+**Persistence:** last path, selected preset, format, sub-bin option and presets are remembered in `~/Documents/SequenceImporter/settings.json`.
+
+**Requirements:**
+- DaVinci Resolve with scripting enabled and a project open
+- No external Python packages
+
+**Known limitations:**
+- The scan runs on the UI thread and blocks the window on large directory trees
+- Frame-range import depends on the Resolve build's handling of `StartIndex` / `EndIndex`; the first-frame fallback covers builds where it fails
+- With sub-bins on, a sequence that is re-imported may stay in the bin it was originally imported into
+- Gaps in the frame numbering are covered by the frame range, so the missing frames show as missing media in Resolve
 
 ## CompDeploy.py
 

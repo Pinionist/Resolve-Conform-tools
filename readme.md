@@ -23,7 +23,10 @@ Some of the script logic based on Thatcher Freeman's "Generate All Clips Timelin
 **Features:**
 - Groups clips by native resolution, one output timeline per source-timeline/resolution pair
 - Optional PAR (Pixel Aspect Ratio) correction for non-square pixels
-- Resolution scaling: No Scaling, Scale by Height, or Scale by Width to an arbitrary target size in px (not a fixed half-resolution step). Options to snap results to even pixel dimensions and to never upscale a clip smaller than the target
+- Resolution scaling: No Scaling, Scale by Height, Scale by Width, Scale by Long Edge, or Scale by Short Edge (default) to an arbitrary target size in px (not a fixed half-resolution step). Options to snap results to even pixel dimensions and to never upscale a clip smaller than the target
+  - **Long Edge / Short Edge** are orientation-independent: they resolve to width or height per source group, so landscape and portrait clips are scaled by the same edge rule (e.g. Short Edge 1920 gives `3620x1920` for 4224x2240 and `1920x3620` for 2240x4224). Square sources behave the same under either mode
+  - **Even snapping:** the target edge is kept exactly at the target size (rounded down to even if the target is odd); the other edge is snapped to the nearest even value with the smallest aspect-ratio error
+  - **Never upscale** is checked against the resolved edge: a source whose Short Edge (or Long Edge) is already at or below the target keeps its native resolution
 - Video-only mode (strips audio tracks)
 - Include/exclude disabled clips
 - Multiple sorting methods (source name, source inpoint, inpoint on timeline, reel name, or unsorted)
